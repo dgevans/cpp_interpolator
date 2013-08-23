@@ -96,6 +96,8 @@ class basis_hermite : public basis_functions{
     
     double x_mean;
     
+    double x_sd;
+    
     double eval(double x, int i, int d) const;
     
     std::pair<VectorXd,VectorXl> save_state() const;
@@ -103,7 +105,7 @@ class basis_hermite : public basis_functions{
     void load_state(const VectorXd &state_d, const VectorXl &state_l);
     
 public:
-    basis_hermite(int _order,double _x_mean):order(_order),x_mean(_x_mean){};
+    basis_hermite(int _order,double _x_mean,double _x_sd):order(_order),x_mean(_x_mean),x_sd(_x_sd){};
     basis_hermite(){};
     
     basis_hermite* clone() const{return new basis_hermite(*this);};
@@ -147,6 +149,8 @@ class interpolator {
     
     void fit(const MatrixXd &X, const VectorXd &Y);
     
+    void fit_regularized(const MatrixXd &X, const VectorXd &Y,double eta);
+    
     int getNumberBasisPolynomials() const;
     
     friend struct interpolator_pickle;
@@ -157,7 +161,7 @@ public:
     
     interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &INFO);
     
-    interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &INFO, int max_poly);
+    interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &INFO,double eta);
     
     double operator()(const RowVectorXd& X) const;
     
@@ -168,7 +172,10 @@ public:
     
     VectorXd eval_der(const Map<rMatrixXd> &X, const VectorXl &d) const;
     
-    VectorXd get_c(){return c;};    
+    VectorXd get_c(){return c;};
+    void set_c(const VectorXd &_c){c = _c;};
+    
+    MatrixXd test_fit(const MatrixXd &X);
 };
 
 

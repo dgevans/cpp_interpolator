@@ -66,19 +66,20 @@ void basis_splines::load_state(const VectorXd &state_d, const VectorXl &state_l)
 double basis_hermite::eval(double x, int i,int d) const
 {
     if(d == 0)
-        return boost::math::hermite<double>(i, x-x_mean);
+        return boost::math::hermite<double>(i, (x-x_mean)/x_sd);
     else if(d == 1)
-        return 2*(x-x_mean)*boost::math::hermite<double>(i, x-x_mean) - boost::math::hermite<double>(i+1, x-x_mean);
+        return (2/x_sd)*((x-x_mean)/x_sd)*boost::math::hermite<double>(i, (x-x_mean)/x_sd) - boost::math::hermite<double>(i+1, (x-x_mean)/x_sd)/x_sd;
     else
-        return 2*(x-x_mean)*eval(x,i,d-1) + 2*eval(x,i,d-2)
-        -eval(x,i+1,d-1);
+        return (2/x_sd)*((x-x_mean)/x_sd)*eval(x,i,d-1) + (2/(x_sd*x_sd))*eval(x,i,d-2)
+        -eval(x,i+1,d-1)/(x_sd*x_sd);
 }
 
 std::pair<VectorXd, VectorXl> basis_hermite::save_state() const
 {
-    VectorXd a(1);
+    VectorXd a(2);
     VectorXl b(1);
     a(0) = x_mean;
+    a(1) = x_sd;
     b(0) = order;
     return std::pair<VectorXd, VectorXl>(a,b);
 }
@@ -86,6 +87,7 @@ std::pair<VectorXd, VectorXl> basis_hermite::save_state() const
 void basis_hermite::load_state(const VectorXd &state_d, const VectorXl &state_l)
 {
     x_mean = state_d(0);
+    x_sd = state_d(1);
     order = state_l(0);
 }
 
@@ -169,7 +171,7 @@ interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolat
 /*
  *Constructor for the interpolator class
  */
-interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &_INFO,int _max_poly):INFO(_INFO),max_poly(_max_poly)
+interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &_INFO,double eta):INFO(_INFO),max_poly(0)
 {
     N = INFO.types.size();
     if (INFO.order.size() != N)
@@ -178,15 +180,15 @@ interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolat
     {
         if (X.rows() != Y.rows())
             throw "X and Y do not have the same number of rows";
-        buildBasisFunctions(X);
-        fit(X, Y);
+        max_poly = buildBasisFunctions(X);
+        fit_regularized(X, Y,eta);
     }
     else if(X.rows() == N)
     {
         if (X.cols() != Y.rows())
             throw "X and Y do not have the same number of rows";
-        buildBasisFunctions(X.transpose());
-        fit(X.transpose(), Y);
+        max_poly = buildBasisFunctions(X.transpose());
+        fit_regularized(X.transpose(), Y,eta);
     }else
         throw "X must have length N in one dimension";
 }
@@ -208,7 +210,10 @@ int interpolator::buildBasisFunctions(const MatrixXd &X)
         }else if (INFO.types[i] == "hermite")
         {
             double xmean = X.col(i).mean();
-            bf.push_back(new basis_hermite(INFO.order[i],xmean));
+            VectorXd x = X.col(i);
+            long n = x.cols();
+            double x_sd = sqrt((x-xmean*VectorXd::Ones(n)).transpose().dot(x-xmean*VectorXd::Ones(n))/n);
+            bf.push_back(new basis_hermite(INFO.order[i],xmean,x_sd));
             _max_poly += INFO.order[i];
         }else
         {
@@ -271,7 +276,8 @@ void interpolator::fit(const MatrixXd &X, const VectorXd &Y)
             c = Phi.fullPivLu().solve(Y);
         }else if(X.rows() > ncols){
             //solve least squares problem.
-            c = Phi.jacobiSvd( ComputeThinU | ComputeThinV ).solve(Y);
+            //c = Phi.jacobiSvd( ComputeThinU | ComputeThinV ).solve(Y);
+            c = Phi.colPivHouseholderQr().solve(Y);
         }else
             throw "Too many basis functions";
         
@@ -311,6 +317,165 @@ void interpolator::fit(const MatrixXd &X, const VectorXd &Y)
         //c = solver.solve(b);
     }
 }
+
+/*
+ *Fits the data using the basis functions
+ */
+void interpolator::fit_regularized(const MatrixXd &X, const VectorXd &Y,double eta)
+{
+    //get number of total number of rows
+    int ncols = 1;
+    bool no_spline = true;
+    for(int i = 0; i < N; i++)
+    {
+        ncols *= bf[i].get_n();
+        if (INFO.types[i] == "spline") {
+            no_spline = false;
+        }
+    }
+    
+    if( (X.rows()*ncols < 1e+8) || no_spline)
+    {
+        MatrixXd Phi(X.rows(),ncols);
+        //fill each row
+        for(int i = 0; i < X.rows(); i++)
+        {
+            RowVectorXd B(1);
+            B(0) = 1;
+            for(int j = 0; j < N; j++)
+            {
+                int n = bf[j].get_n();
+                RowVectorXd temp(n);
+                for(int ib = 0; ib < n; ib++)
+                    temp(ib) = bf[j](X(i,j),ib);
+                B = kron(temp,B);
+            }
+            Phi.row(i) = B;
+        }
+        //c = Phi.jacobiSvd(ComputeThinU | ComputeThinV).solve(Y);
+        if(X.rows() == ncols)
+        {
+            c = Phi.fullPivLu().solve(Y);
+        }else if(X.rows() > ncols){
+            //solve least squares problem.
+            //c = Phi.jacobiSvd( ComputeThinU | ComputeThinV ).solve(Y);
+            //c = Phi.colPivHouseholderQr().solve(Y);
+
+            MatrixXd A = Phi.transpose()*Phi - eta * MatrixXd::Identity(ncols,ncols);
+            VectorXd b = Phi.transpose()*Y;
+            c = A.colPivHouseholderQr().solve(b);
+        }else
+            throw "Too many basis functions";
+        
+    }else
+    {
+        SparseMatrix<double,RowMajor> Phi(X.rows(),ncols);
+        //fill each row
+        for(int i = 0; i < X.rows(); i++)
+        {
+            SparseMatrix<double,RowMajor> B(1,1);
+            B.coeffRef(0,0) = 1;
+            B.makeCompressed();
+            for(int j =0; j < N; j++)
+            {
+                int n = bf[j].get_n();
+                SparseMatrix<double,RowMajor> temp(1,n);
+                temp.reserve(n);
+                for(int ib = 0; ib < n; ib ++)
+                {
+                    double v_ib = bf[j](X(i,j),ib);
+                    if(v_ib != 0)
+                        temp.insert(0, ib) = v_ib;
+                }
+                B = kron(temp,B);
+            }
+            Phi.row(i) = B;
+        }
+        SparseMatrix<double> A = (Phi.transpose())*Phi;
+        VectorXd b = ( Phi.transpose() ) * Y;
+        throw "Have not implemented yet!";
+        //CholmodDecomposition<SparseMatrix<double> > solver;
+        //UmfPackLU<SparseMatrix<double> > solver;
+        //BiCGSTAB<SparseMatrix<double> > solver;
+        //SimplicialLDLT<SparseMatrix<double> > solver;
+        //Solve the matrix
+        //solver.compute(A);
+        //c = solver.solve(b);
+    }
+}
+/*
+ *Fits the data using the basis functions
+ */
+MatrixXd interpolator::test_fit(const MatrixXd &X)
+{
+    //get number of total number of rows
+    int ncols = 1;
+    bool no_spline = true;
+    for(int i = 0; i < N; i++)
+    {
+        ncols *= bf[i].get_n();
+        if (INFO.types[i] == "spline") {
+            no_spline = false;
+        }
+    }
+    
+    if( (X.rows()*ncols < 1e+8) || no_spline)
+    {
+        MatrixXd Phi(X.rows(),ncols);
+        //fill each row
+        for(int i = 0; i < X.rows(); i++)
+        {
+            RowVectorXd B(1);
+            B(0) = 1;
+            for(int j = 0; j < N; j++)
+            {
+                int n = bf[j].get_n();
+                RowVectorXd temp(n);
+                for(int ib = 0; ib < n; ib++)
+                    temp(ib) = bf[j](X(i,j),ib);
+                B = kron(temp,B);
+            }
+            Phi.row(i) = B;
+        }
+        return Phi;
+        
+    }else
+    {
+        SparseMatrix<double,RowMajor> Phi(X.rows(),ncols);
+        //fill each row
+        for(int i = 0; i < X.rows(); i++)
+        {
+            SparseMatrix<double,RowMajor> B(1,1);
+            B.coeffRef(0,0) = 1;
+            B.makeCompressed();
+            for(int j =0; j < N; j++)
+            {
+                int n = bf[j].get_n();
+                SparseMatrix<double,RowMajor> temp(1,n);
+                temp.reserve(n);
+                for(int ib = 0; ib < n; ib ++)
+                {
+                    double v_ib = bf[j](X(i,j),ib);
+                    if(v_ib != 0)
+                        temp.insert(0, ib) = v_ib;
+                }
+                B = kron(temp,B);
+            }
+            Phi.row(i) = B;
+        }
+        SparseMatrix<double> A = (Phi.transpose())*Phi;
+        //VectorXd b = ( Phi.transpose() ) * Y;
+        throw "Have not implemented yet!";
+        //CholmodDecomposition<SparseMatrix<double> > solver;
+        //UmfPackLU<SparseMatrix<double> > solver;
+        //BiCGSTAB<SparseMatrix<double> > solver;
+        //SimplicialLDLT<SparseMatrix<double> > solver;
+        //Solve the matrix
+        //solver.compute(A);
+        //c = solver.solve(b);
+    }
+}
+
 double interpolator::operator()(const RowVectorXd &X) const
 {
     //setup

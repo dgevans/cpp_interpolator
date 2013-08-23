@@ -168,11 +168,14 @@ BOOST_PYTHON_MODULE(cpp_interpolator)
     //Now register interpolate class
     class_<interpolator>("interpolate",init<const MatrixXd&,const VectorXd&,const interpolator_INFO &>())
     .def(init<>())
-    .def(init<const MatrixXd&,const VectorXd&,const interpolator_INFO &,int>())
+    .def(init<const MatrixXd&,const VectorXd&,const interpolator_INFO &,double>())
     .def_pickle(interpolator_pickle())
     .def("__call__",&interpolator::eval)
     .def("__call__",&interpolator::eval_der)
-    .def("get_c",&interpolator::get_c);
+    .def("get_c",&interpolator::get_c)
+    .def("set_c",&interpolator::set_c)
+    .def("get_Phi",&interpolator::test_fit);
+    
     
 }
 
