@@ -363,7 +363,7 @@ void interpolator::fit_regularized(const MatrixXd &X, const VectorXd &Y,double e
 
             MatrixXd A = Phi.transpose()*Phi - eta * MatrixXd::Identity(ncols,ncols);
             VectorXd b = Phi.transpose()*Y;
-            c = A.colPivHouseholderQr().solve(b);
+            c = A.fullPivLu().solve(b);
         }else
             throw "Too many basis functions";
         
