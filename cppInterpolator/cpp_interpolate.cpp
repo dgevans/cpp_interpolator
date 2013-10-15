@@ -122,7 +122,7 @@ struct interpolator_INFO_pickle : bp::pickle_suite
             bp_order.append(INFO.order[i]);
             bp_k.append(INFO.k[i]);
         }
-        return bp::make_tuple(bp_types,bp_order,bp_k);
+        return bp::make_tuple(bp_types,bp_order,bp_k,INFO.max_poly);
     }
     
     static
@@ -136,6 +136,7 @@ struct interpolator_INFO_pickle : bp::pickle_suite
         bp::list bp_types = bp::extract<bp::list>(state[0]);
         bp::list bp_order = bp::extract<bp::list>(state[1]);
         bp::list bp_k = bp::extract<bp::list>(state[2]);
+        INFO.max_poly = bp::extract<int>(state[3]);
         
         for(int i=0; i < bp::len(bp_types);i++)
         {
@@ -163,7 +164,8 @@ BOOST_PYTHON_MODULE(cpp_interpolator)
     //Now register interpolate_INFO
     class_<interpolator_INFO, boost::shared_ptr<interpolator_INFO> >("interpolate_INFO")
     .def_pickle(interpolator_INFO_pickle())
-    .def("__init__", make_constructor(&make_INFO));
+    .def("__init__", make_constructor(&make_INFO))
+    .def_readwrite("max_poly",&interpolator_INFO::max_poly);
     
     //Now register interpolate class
     class_<interpolator>("interpolate",init<const MatrixXd&,const VectorXd&,const interpolator_INFO &>())

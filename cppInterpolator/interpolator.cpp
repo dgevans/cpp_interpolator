@@ -146,8 +146,9 @@ breakpoints setUpBreakpoints(const VectorXd &x,int n, int k)
 /*
  *Constructor for the interpolator class
  */
-interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &_INFO):INFO(_INFO),max_poly(0)
+interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &_INFO):INFO(_INFO)
 {
+    int max_poly;
     N = INFO.types.size();
     if (INFO.order.size() != N)
         throw "order size does not match types size in INFO";
@@ -166,13 +167,17 @@ interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolat
         fit(X.transpose(), Y);
     }else
         throw "X must have length N in one dimension";
+    if (INFO.max_poly == -1) {
+        INFO.max_poly = max_poly;
+    }
 }
 
 /*
  *Constructor for the interpolator class
  */
-interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &_INFO,double eta):INFO(_INFO),max_poly(0)
+interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolator_INFO &_INFO,double eta):INFO(_INFO)
 {
+    int max_poly;
     N = INFO.types.size();
     if (INFO.order.size() != N)
         throw "order size does not match types size in INFO";
@@ -191,6 +196,9 @@ interpolator::interpolator(const MatrixXd& X, const VectorXd& Y,const interpolat
         fit_regularized(X.transpose(), Y,eta);
     }else
         throw "X must have length N in one dimension";
+    if (INFO.max_poly == -1) {
+        INFO.max_poly = max_poly;
+    }
 }
 
 /*
@@ -226,14 +234,105 @@ int interpolator::buildBasisFunctions(const MatrixXd &X)
 /*
  *Computes the number of basis functions from combining polynomials.
  */
-int interpolator::getNumberBasisPolynomials() const
+int interpolator::getNumberBasisFunctions(int i,int n_poly) const
 {
-    int n_poly =0;
-    std::vector<int> _max_poly(N,0);
-    for (int i=0; i < N; i++) {
-        
+    if(i == 0)
+    {
+        if (INFO.types[i] == "spline") {
+            return bf[i].get_n();
+        }else
+            return std::min(bf[i].get_n()-1,n_poly)+1;
+    }else
+    {
+        if (INFO.types[i] == "spline")
+            return bf[i].get_n()*getNumberBasisFunctions(i-1, n_poly);
+        else{
+            int poly = 0;
+            for (int j = 0; j <=std::min(bf[i].get_n()-1,n_poly); j++) {
+                poly += getNumberBasisFunctions(i-1, n_poly-j);
+            }
+            return poly;
+        }
+            
     }
 }
+
+/*
+ *Fills a Row partially starting at basis function i and n_poly
+ */
+RowVectorXd interpolator::fillRow(int i, int n_poly,const std::vector<RowVectorXd> &B) const
+{
+    if(i == 0)
+    {
+        if (INFO.types[i] == "spline") {
+            return B[i];
+        }else
+        {
+            int p = std::min(bf[i].get_n()-1,n_poly)+1;
+            return B[i].head(p);
+        }
+    }else
+    {
+        if (INFO.types[i] == "spline") {
+            return kron(B[i],fillRow(i-1, n_poly, B));
+        }else
+        {
+            int p = std::min(bf[i].get_n()-1,n_poly)+1;
+            int n_ret = 0;
+            std::vector<RowVectorXd> Bf;
+            for(int j = 0; j < p; j++)
+            {
+                Bf.push_back(fillRow(i-1, n_poly-j, B));
+                n_ret += Bf[j].cols();
+            }
+            RowVectorXd ret(n_ret);
+            int n = 0;
+            for(int j1 =0; j1 <p; j1++)
+            {
+                for (int j2 =0; j2 < Bf[j1].cols(); j2++) {
+                    ret(n) = B[i](j1)*Bf[j1](j2);
+                    n++;
+                }
+            }
+            return ret;
+        }
+    }
+}
+
+/*
+ *Fills a row with basis functions using max_poly
+ */
+RowVectorXd interpolator::fillRow(const RowVectorXd &x) const
+{
+    //First construct a vector of VectorXd containg all the basis functions evaluated at x
+    std::vector<RowVectorXd> B;
+    for (int i =0 ; i< N; i++) {
+        RowVectorXd ret(bf[i].get_n());
+        for(int j=0; j< bf[i].get_n(); j++)
+            ret(j) = bf[i](x(i),j);
+        B.push_back(ret);
+    }
+    
+    return fillRow(N-1,INFO.max_poly,B);
+}
+
+/*
+ *Fills a row with basis functions using max_poly
+ */
+RowVectorXd interpolator::fillRow(const RowVectorXd &x, const VectorXl &d) const
+{
+    //First construct a vector of VectorXd containg all the basis functions evaluated at x
+    std::vector<RowVectorXd> B;
+    for (int i =0 ; i< N; i++) {
+        RowVectorXd ret(bf[i].get_n());
+        for(int j=0; j< bf[i].get_n(); j++)
+            ret(j) = bf[i](x(i),j,d(i));
+        B.push_back(ret);
+    }
+    
+    return fillRow(N-1,INFO.max_poly,B);
+}
+
 
 
 /*
@@ -251,14 +350,14 @@ void interpolator::fit(const MatrixXd &X, const VectorXd &Y)
             no_spline = false;
         }
     }
-    
+    ncols = getNumberBasisFunctions();
     if( (X.rows()*ncols < 1e+8) || no_spline)
     {
         MatrixXd Phi(X.rows(),ncols);
         //fill each row
         for(int i = 0; i < X.rows(); i++)
         {
-            RowVectorXd B(1);
+            /*RowVectorXd B(1);
             B(0) = 1;
             for(int j = 0; j < N; j++)
             {
@@ -267,13 +366,13 @@ void interpolator::fit(const MatrixXd &X, const VectorXd &Y)
                 for(int ib = 0; ib < n; ib++)
                     temp(ib) = bf[j](X(i,j),ib);
                 B = kron(temp,B);
-            }
-            Phi.row(i) = B;
+            }*/
+            Phi.row(i) = fillRow(X.row(i));//B;
         }
         //c = Phi.jacobiSvd(ComputeThinU | ComputeThinV).solve(Y);
         if(X.rows() == ncols)
         {
-            c = Phi.fullPivLu().solve(Y);
+            c = Phi.partialPivLu().solve(Y);
         }else if(X.rows() > ncols){
             //solve least squares problem.
             //c = Phi.jacobiSvd( ComputeThinU | ComputeThinV ).solve(Y);
@@ -333,14 +432,14 @@ void interpolator::fit_regularized(const MatrixXd &X, const VectorXd &Y,double e
             no_spline = false;
         }
     }
-    
+    ncols = getNumberBasisFunctions();
     if( (X.rows()*ncols < 1e+8) || no_spline)
     {
         MatrixXd Phi(X.rows(),ncols);
         //fill each row
         for(int i = 0; i < X.rows(); i++)
         {
-            RowVectorXd B(1);
+            /*RowVectorXd B(1);
             B(0) = 1;
             for(int j = 0; j < N; j++)
             {
@@ -349,13 +448,13 @@ void interpolator::fit_regularized(const MatrixXd &X, const VectorXd &Y,double e
                 for(int ib = 0; ib < n; ib++)
                     temp(ib) = bf[j](X(i,j),ib);
                 B = kron(temp,B);
-            }
-            Phi.row(i) = B;
+            }*/
+            Phi.row(i) = fillRow(X.row(i));//B;
         }
         //c = Phi.jacobiSvd(ComputeThinU | ComputeThinV).solve(Y);
         if(X.rows() == ncols)
         {
-            c = Phi.fullPivLu().solve(Y);
+            c = Phi.partialPivLu().solve(Y);
         }else if(X.rows() > ncols){
             //solve least squares problem.
             //c = Phi.jacobiSvd( ComputeThinU | ComputeThinV ).solve(Y);
@@ -418,7 +517,7 @@ MatrixXd interpolator::test_fit(const MatrixXd &X)
             no_spline = false;
         }
     }
-    
+    ncols = getNumberBasisFunctions();
     if( (X.rows()*ncols < 1e+8) || no_spline)
     {
         MatrixXd Phi(X.rows(),ncols);
@@ -435,7 +534,7 @@ MatrixXd interpolator::test_fit(const MatrixXd &X)
                     temp(ib) = bf[j](X(i,j),ib);
                 B = kron(temp,B);
             }
-            Phi.row(i) = B;
+            Phi.row(i) = fillRow(X.row(i));//B;
         }
         return Phi;
         
@@ -479,17 +578,18 @@ MatrixXd interpolator::test_fit(const MatrixXd &X)
 double interpolator::operator()(const RowVectorXd &X) const
 {
     //setup
-    VectorXd B(1);
-    B(0) = 1;
+    //VectorXd B(1);
+    //B(0) = 1;
     
-    for (int i = 0; i < N; i++) {
+    /*for (int i = 0; i < N; i++) {
         int n =  bf[i].get_n();
         VectorXd temp(n);
         for (int ib = 0; ib < n; ib++) {
             temp(ib) = bf[i](X(i),ib);
         }
         B= kron(temp,B);
-    }
+    }*/
+    VectorXd B = fillRow(X);
     
     return B.dot(c);
 }
@@ -497,7 +597,7 @@ double interpolator::operator()(const RowVectorXd &X) const
 double interpolator::operator()(const RowVectorXd &X, const VectorXl &d) const
 {
     //setup
-    VectorXd B(1);
+    /*VectorXd B(1);
     B(0) = 1;
     
     for (int i = 0; i < N; i++) {
@@ -507,7 +607,8 @@ double interpolator::operator()(const RowVectorXd &X, const VectorXl &d) const
             temp(ib) = bf[i](X(i),ib,d(i));
         }
         B= kron(temp,B);
-    }
+    }*/
+    VectorXd B = fillRow(X,d);
     
     return B.dot(c);
 }

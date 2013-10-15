@@ -8,10 +8,9 @@ Created on Tue Aug 13 11:34:48 2013
 from numpy import *
 from cpp_interpolator import interpolate
 from cpp_interpolator import interpolate_INFO
-from cpp_interpolator import test_INFO
 from Spline import Spline
 
-INFO = interpolate_INFO(['spline','hermite'],[10,3],[3,5])
+INFO = interpolate_INFO(['spline','spline'],[10,5],[3,3])
 
 x1 = linspace(0.,1.,10)
 x2 = linspace(0,1.,10)

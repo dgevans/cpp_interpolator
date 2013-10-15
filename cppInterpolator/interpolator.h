@@ -127,9 +127,9 @@ struct interpolator_INFO {
     
     std::vector<int> k;//this is just for splines
     
-    interpolator_INFO(){};
+    int max_poly;
     
-    interpolator_INFO(int N):types(N),order(N),k(N){};
+    interpolator_INFO():max_poly(-1){};
     
 };
 
@@ -143,15 +143,21 @@ class interpolator {
     
     VectorXd c;
     
-    int max_poly;
-    
     int buildBasisFunctions(const MatrixXd &X);
     
     void fit(const MatrixXd &X, const VectorXd &Y);
     
     void fit_regularized(const MatrixXd &X, const VectorXd &Y,double eta);
     
-    int getNumberBasisPolynomials() const;
+    int getNumberBasisFunctions(int i, int n_poly) const;
+    
+    int getNumberBasisFunctions() const{return getNumberBasisFunctions(N-1,INFO.max_poly);};
+    
+    RowVectorXd fillRow(int i, int n_poly,const std::vector<RowVectorXd> &B) const;
+    
+    RowVectorXd fillRow(const  RowVectorXd &x) const;
+    
+    RowVectorXd fillRow(const  RowVectorXd &x,const VectorXl &d) const;
     
     friend struct interpolator_pickle;
     
